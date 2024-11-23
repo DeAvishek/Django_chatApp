@@ -5,7 +5,7 @@ from django.contrib.auth.models import User
 from .models import Message, Room
 
 class ChatConsumer(AsyncWebsocketConsumer):
-    
+
     # Wrapping database calls in async functions using sync_to_async
 
     @sync_to_async
@@ -24,6 +24,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
             message=message
         )
 
+    @sync_to_async
+    def create_room(self, room_id, user):
+        # Create a room with user_1 and user_2 as the same user
+        try:
+            return Room.objects.create(room_id=room_id, user_1=user, user_2=user)
+        except Exception as e:
+            return None  # Return None in case of any error
+
     async def connect(self):
         # This method is called when the WebSocket is handshaking as part of the connection process
         self.room_id = self.scope['url_route']['kwargs']['room_id']  # Room id for chat
@@ -33,9 +41,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         room = await self.get_room(self.room_id)  # Async call to get the room
 
         if room is None:
-            await self.close()
-            return
+            # Room does not exist, create a new room
+            user = self.scope['user']
+            room = await self.create_room(self.room_id, user)  # Use async call to create room
+            if not room:
+                await self.close()  # If room creation fails, close the connection
+                return
         
+        # Check if the user is part of the room (either user_1 or user_2)
         user = self.scope['user']
         if user != room.user_1 and user != room.user_2:
             # If the user is not in the room, close the connection
@@ -66,7 +79,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         # Get the room object asynchronously
         room = await self.get_room(self.room_id)
         if room is None:
-            return
+            return  # If room doesn't exist, ignore the message (or handle this as needed)
 
         # Save the message to the database asynchronously
         message_obj = await self.save_message(user, room, message)
