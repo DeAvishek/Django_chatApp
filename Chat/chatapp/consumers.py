@@ -11,7 +11,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
     @sync_to_async
     def get_room(self, room_id):
         try:
-            return Room.objects.get(room_id=room_id)
+            room=Room.objects.get(room_id=room_id)
+            room.user_1 =room.user_1  # This will trigger a query to fetch the related User object
+            room.user_2 = room.user_2  # This will trigger a query to fetch the related User object
+            return room
         except Room.DoesNotExist:
             return None
 
@@ -30,30 +33,42 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             return Room.objects.create(room_id=room_id, user_1=user, user_2=user)
         except Exception as e:
-            return None  # Return None in case of any error
+            return None  # Return None in case of any error 
+        
+    @sync_to_async
+    def assign_user_to_room(self, room, user):
+        try:
+            room.user_2 = user
+            room.save()
+            return room
+        except Exception as e:
+            print(f"Error assigning user to room: {e}")
+            return None
 
     async def connect(self):
-        # This method is called when the WebSocket is handshaking as part of the connection process
-        self.room_id = self.scope['url_route']['kwargs']['room_id']  # Room id for chat
-        self.room_group_name = f"chat_{self.room_id}"  # Group name, based on the room
+        print(f"Connecting user: {self.scope['user']}, authenticated: {self.scope['user'].is_authenticated}")
+        
+        self.room_id = self.scope['url_route']['kwargs']['room_id']
+        self.room_group_name = f"chat_{self.room_id}"
 
-        # Check if the room exists and if the user is part of the room
-        room = await self.get_room(self.room_id)  # Async call to get the room
+        room = await self.get_room(self.room_id)
+        user = self.scope['user']
 
         if room is None:
-            # Room does not exist, create a new room
-            user = self.scope['user']
-            room = await self.create_room(self.room_id, user)  # Use async call to create room
+            print(f"Creating new room for user: {user}")
+            room = await self.create_room(self.room_id, user)
             if not room:
-                await self.close()  # If room creation fails, close the connection
+                print("Room creation failed")
+                await self.close()
                 return
-        
-        # Check if the user is part of the room (either user_1 or user_2)
-        user = self.scope['user']
-        if user != room.user_1 and user != room.user_2:
-            # If the user is not in the room, close the connection
-            await self.close()
-            return
+        else:
+            # If room exists but user isn't assigned, assign them as user_2
+            if user != room.user_1 and user != room.user_2 and room.user_2 == room.user_1:
+                room = await self.assign_user_to_room(room, user)
+                if not room:
+                    print("Failed to assign user to room")
+                    await self.close()
+                    return
 
         # Join the WebSocket group
         await self.channel_layer.group_add(
